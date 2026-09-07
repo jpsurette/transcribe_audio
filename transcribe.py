@@ -3,10 +3,10 @@ Personal project using Modulate's batch and streaming transcription tools
 
 File: Upload a pre-recorded file from the inputs/ directory to the BATCH endpoint (velma-2-stt-batch) to get a transcription.
 
-Auth: MODULATE_API_KEY saved locally to a .env file or passed via --api-key.
+Auth: API_KEY saved locally to a .env file or passed via --api-key.
 
 Usage:
-    export MODULATE_API_KEY==...
+    export API_KEY==...
     python transcribe.py file 20260907.m4a
 
 TODO:
@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Return the parser with arguments for file, directory, and microphone use."""
     # Shared options
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--api-key", default=None, help="API key. Overrides the MODULATE_API_KEY environment variable.")
+    common.add_argument("--api-key", default=None, help="API key. Overrides the API_KEY environment variable.")
     common.add_argument(
         "--no-diarization",
         dest="diarization",
