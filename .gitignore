@@ -3,9 +3,20 @@
 # audio files
 *.mp3
 
-# ignoring inputs/outputs until examples are added
+# keep the inputs/outputs folder structure (via .gitkeep), ignore their contents
 inputs/*
+!inputs/.gitkeep
+!inputs/transcribed/
+inputs/transcribed/*
+!inputs/transcribed/.gitkeep
+
 outputs/*
+!outputs/raw/
+outputs/raw/*
+!outputs/raw/.gitkeep
+!outputs/cleaned/
+outputs/cleaned/*
+!outputs/cleaned/.gitkeep
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
