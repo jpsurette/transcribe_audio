@@ -14,10 +14,11 @@ CLI usage:
 import argparse
 import re
 import sys
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from config import CLEANED_DIR, RAW_DIR
+from config import CLEANED_DIR, GLOSSARY_PATH, RAW_DIR
 
 
 # The API inserts its own punctuation between the words of a spoken command
@@ -233,11 +234,66 @@ def convert_numbers(text: str, recorded_on: date | None = None) -> str:
 
 
 
-def format_transcript(text: str, recorded_on: date | None = None) -> str:
+# ------------------------------------------------------------------------------------- #
+# Glossary — fix known misspellings of specialist terms, run before everything else
+# ------------------------------------------------------------------------------------- #
+# File format, one term per line:
+#     Canonical Spelling: misspelling, other misspelling
+# Matching is whole-word and case-insensitive; spaces and hyphens in a variant match either.
+# The canonical spelling is matched too, so its capitalization is always normalized.
+# Blank lines and lines starting with # are ignored. See glossary.example.txt.
+
+@dataclass
+class Glossary:
+    pattern: re.Pattern
+    replacements: dict[str, str]  # normalized variant -> canonical spelling
+
+    def apply(self, text: str) -> str:
+        return self.pattern.sub(lambda m: self.replacements[_normalize_term(m.group())], text)
+
+
+def _normalize_term(term: str) -> str:
+    return re.sub(r"[\s-]+", " ", term.strip().lower())
+
+
+def parse_glossary(text: str) -> Glossary | None:
+    replacements: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        canonical, _, variants = line.partition(":")
+        canonical = canonical.strip()
+        for term in [canonical, *variants.split(",")]:
+            if term.strip():
+                replacements[_normalize_term(term)] = canonical
+    if not replacements:
+        return None
+
+    # Longest first so "de la riva" wins over a shorter overlapping entry.
+    alternatives = [
+        r"[\s-]+".join(re.escape(word) for word in variant.split())
+        for variant in sorted(replacements, key=len, reverse=True)
+    ]
+    pattern = re.compile(rf"\b(?:{'|'.join(alternatives)})\b", re.IGNORECASE)
+    return Glossary(pattern, replacements)
+
+
+def load_glossary(path: Path | None) -> Glossary | None:
+    """Load a glossary file; returns None if there is no file (the glossary is optional)."""
+    if path is None or not path.is_file():
+        return None
+    return parse_glossary(path.read_text(encoding="utf-8"))
+
+
+def format_transcript(text: str, recorded_on: date | None = None, glossary: Glossary | None = None) -> str:
     """Convert spoken punctuation/formatting phrases into literal characters.
 
     recorded_on fills in "date today"; without it that phrase is left as spoken.
+    glossary, if given, corrects known misspellings before any other formatting.
     """
+    if glossary:
+        text = glossary.apply(text)
     text = convert_numbers(text, recorded_on)
 
     # Each chunk is (text, from_command) so punctuation the API inserted can be told apart
@@ -348,6 +404,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="File type for the cleaned transcript when --output isn't given (default: md).",
     )
     parser.add_argument(
+        "--glossary",
+        type=Path,
+        default=GLOSSARY_PATH,
+        help=f"Glossary of term spellings to correct (default: {GLOSSARY_PATH}; skipped if missing)",
+    )
+    parser.add_argument(
         "--raw-dir",
         type=Path,
         default=RAW_DIR,
@@ -363,13 +425,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _process_file(
-    input_path: Path, output_arg: str | None, to_stdout: bool, cleaned_dir: Path, file_format: str
+    input_path: Path,
+    output_arg: str | None,
+    to_stdout: bool,
+    cleaned_dir: Path,
+    file_format: str,
+    glossary: Glossary | None,
 ) -> None:
     if not input_path.is_file():
         sys.exit(f"Error: input file not found: {input_path}")
 
     raw_text = input_path.read_text(encoding="utf-8")
-    cleaned_text = format_transcript(raw_text, recorded_on=date_from_filename(input_path.name))
+    cleaned_text = format_transcript(raw_text, date_from_filename(input_path.name), glossary)
 
     if to_stdout:
         print(cleaned_text)
@@ -385,9 +452,10 @@ def main() -> None:
     args = build_parser().parse_args()
     raw_dir = args.raw_dir.expanduser()
     cleaned_dir = args.cleaned_dir.expanduser()
+    glossary = load_glossary(args.glossary.expanduser())
 
     if args.input_file:
-        _process_file(Path(args.input_file), args.output, args.stdout, cleaned_dir, args.format)
+        _process_file(Path(args.input_file), args.output, args.stdout, cleaned_dir, args.format, glossary)
         return
 
     # No file given -> batch-process everything in outputs/raw/
@@ -403,7 +471,7 @@ def main() -> None:
         return
 
     for input_path in txt_files:
-        _process_file(input_path, output_arg=None, to_stdout=args.stdout, cleaned_dir=cleaned_dir, file_format=args.format)
+        _process_file(input_path, output_arg=None, to_stdout=args.stdout, cleaned_dir=cleaned_dir, file_format=args.format, glossary=glossary)
 
 
 if __name__ == "__main__":

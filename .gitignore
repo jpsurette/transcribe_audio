@@ -3,6 +3,9 @@
 # audio files
 *.mp3
 
+# personal glossary (glossary.example.txt is the committed template)
+/glossary.txt
+
 # keep the inputs/outputs folder structure (via .gitkeep), ignore their contents
 inputs/*
 !inputs/.gitkeep

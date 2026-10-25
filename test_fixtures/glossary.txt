@@ -1,0 +1,17 @@
+# Glossary of specialist terms the transcription API tends to misspell.
+# Copy this file to glossary.txt (gitignored) and add your own terms, or point
+# TRANSCRIBE_GLOSSARY in .env at a glossary elsewhere.
+#
+# Format, one term per line:
+#     Canonical Spelling: misspelling, other misspelling
+# Matching is whole-word and case-insensitive. Spaces and hyphens in a variant match
+# either, so "omo plata" also catches "omo-plata". The canonical spelling itself is
+# matched too, so its capitalization is normalized. A line with no colon only does that.
+#
+# Add a variant whenever a new misspelling shows up in outputs/raw/.
+
+Omoplata: omoplatte, omoplatta, omo plata
+Kimura: kimora
+De la Riva: della riva, de la reeva
+Kesa Gatame: kesa gatami
+Berimbolo: barimbolo

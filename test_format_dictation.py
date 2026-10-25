@@ -13,9 +13,32 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-from format_dictation import date_from_filename, format_transcript
+from format_dictation import date_from_filename, format_transcript, load_glossary, parse_glossary
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "test_fixtures"
+FIXTURE_GLOSSARY = load_glossary(FIXTURES_DIR / "glossary.txt")
+
+GLOSSARY = parse_glossary("""
+# comment lines and blank lines are ignored
+
+Omoplata: omoplatte, omo plata
+De la Riva: della riva, de la reeva
+Kimura
+""")
+
+# (raw transcript, expected cleaned output) with GLOSSARY applied
+GLOSSARY_CASES = [
+    ("omoplatte class", "Omoplata class"),
+    ("OMOPLATTE", "Omoplata"),
+    ("omo plata and omo-plata", "Omoplata and Omoplata"),
+    ("omoplata", "Omoplata"),
+    ("della riva guard", "De la Riva guard"),
+    ("from de la reeva", "from De la Riva"),
+    ("kimura grip", "Kimura grip"),
+    ("omoplattes", "omoplattes"),
+    ("hashtag omoplatte", "#Omoplata"),
+    ("omoplatte period", "Omoplata. "),
+]
 
 # (raw transcript, expected cleaned output)
 CASES = [
@@ -99,6 +122,16 @@ class FormatTranscriptTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(format_transcript(raw), expected)
 
+    def test_glossary(self):
+        for raw, expected in GLOSSARY_CASES:
+            with self.subTest(raw=raw):
+                self.assertEqual(format_transcript(raw, glossary=GLOSSARY), expected)
+
+    def test_no_glossary(self):
+        self.assertEqual(format_transcript("omoplatte class"), "omoplatte class")
+        self.assertIsNone(parse_glossary("# only comments\n\n"))
+        self.assertIsNone(load_glossary(FIXTURES_DIR / "does_not_exist.txt"))
+
     def test_date_today(self):
         recorded = date(2026, 10, 25)
         self.assertEqual(format_transcript("date today", recorded), "2026-10-25")
@@ -117,7 +150,9 @@ class FormatTranscriptTests(unittest.TestCase):
             expected_path = raw_path.with_name(raw_path.name.replace(".raw.txt", ".expected.md"))
             with self.subTest(fixture=raw_path.name):
                 self.assertEqual(
-                    format_transcript(raw_path.read_text(encoding="utf-8"), date_from_filename(raw_path.name)),
+                    format_transcript(
+                        raw_path.read_text(encoding="utf-8"), date_from_filename(raw_path.name), FIXTURE_GLOSSARY
+                    ),
                     expected_path.read_text(encoding="utf-8"),
                 )
 

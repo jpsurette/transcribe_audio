@@ -32,3 +32,4 @@ def _env_path(name: str, default: Path) -> Path:
 INPUTS_DIR = _env_path("TRANSCRIBE_INPUTS_DIR", SCRIPT_DIR / "inputs")
 RAW_DIR = _env_path("TRANSCRIBE_RAW_DIR", SCRIPT_DIR / "outputs" / "raw")
 CLEANED_DIR = _env_path("TRANSCRIBE_CLEANED_DIR", SCRIPT_DIR / "outputs" / "cleaned")
+GLOSSARY_PATH = _env_path("TRANSCRIBE_GLOSSARY", SCRIPT_DIR / "glossary.txt")

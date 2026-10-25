@@ -32,8 +32,8 @@ from urllib.parse import urlencode
 
 import requests
 
-from config import CLEANED_DIR, INPUTS_DIR, RAW_DIR
-from format_dictation import date_from_filename, format_transcript
+from config import CLEANED_DIR, GLOSSARY_PATH, INPUTS_DIR, RAW_DIR
+from format_dictation import date_from_filename, format_transcript, load_glossary
 
 API_BASE_URL = "https://modulate-developer-apis.com/api"
 BATCH_ENDPOINT = f"{API_BASE_URL}/velma-2-stt-batch"
@@ -75,6 +75,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["md", "txt"],
         default="md",
         help="File type for the cleaned transcript (default: md).",
+    )
+    common.add_argument(
+        "--glossary",
+        type=Path,
+        default=GLOSSARY_PATH,
+        help=f"Glossary of term spellings to correct (default: {GLOSSARY_PATH}; skipped if missing)",
     )
     common.add_argument(
         "--raw-dir",
@@ -161,7 +167,8 @@ def run_batch(api_key: str, audio_file_path: Path, raw_dir: Path, cleaned_dir: P
     cleaned_path = cleaned_dir / f"{stem}.{args.format}"
 
     with open(cleaned_path, "w", encoding="utf-8") as file:
-        file.write(format_transcript(result["text"], recorded_on=recording_date(audio_file_path)))
+        glossary = load_glossary(args.glossary.expanduser())
+        file.write(format_transcript(result["text"], recording_date(audio_file_path), glossary))
     print(f"Cleaned transcript written to: {cleaned_path}")
 
 
