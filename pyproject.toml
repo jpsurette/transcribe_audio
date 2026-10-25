@@ -1,0 +1,22 @@
+[project]
+name = "transcribe-audio"
+version = "0.1.0"
+description = "Batch transcription of dictated audio with Modulate Velma-2, formatted into Markdown notes."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "python-dotenv>=1.0",
+    "requests>=2.31",
+]
+
+[project.scripts]
+transcribe = "transcribe:main"
+format-dictation = "format_dictation:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Flat layout: the modules live at the repo root.
+py-modules = ["config", "format_dictation", "transcribe"]
