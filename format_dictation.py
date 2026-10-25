@@ -24,10 +24,32 @@ def _pat(p: str) -> re.Pattern:
 
 
 # (pattern, symbol, before, after, capitalize_next)
-#   before: 'strip' (remove space before symbol) | 'space' (force exactly one space before)
+#   before: 'strip' (remove spaces before symbol) | 'space' (force exactly one space before)
+#           | 'line' (strip spaces and start a new line if not already at one) | 'natural' (leave as-is)
 #   after:  'none' (attach directly to next word) | 'space' (force exactly one space) | 'natural' (leave as-is)
+#           | 'line' (like 'none', but also drop punctuation the API inserted after the command)
+# Only spaces are stripped, never newlines or tabs produced by earlier commands.
 # Order matters where one phrase is a prefix of another (e.g. ellipsis vs. dot).
 TOKENS = [
+    # Line structure (Markdown / Obsidian)
+    (_pat(r"\bnew\s+paragraph\b"), "\n\n", "strip", "line", True),
+    (_pat(r"\bnew\s+line\b"), "\n", "strip", "line", True),
+    (_pat(r"\bcheck\s*box\b"), "- [ ] ", "line", "line", True),
+    (_pat(r"\bbullet(\s+point)?\b"), "- ", "line", "line", True),
+    (_pat(r"\bheading\s+(one|1)\b"), "# ", "line", "line", True),
+    (_pat(r"\bheading\s+(two|2)\b"), "## ", "line", "line", True),
+    (_pat(r"\bheading\s+(three|3)\b"), "### ", "line", "line", True),
+    (_pat(r"\bindent\b"), "\t", "natural", "line", False),
+
+    # Obsidian inline syntax
+    (_pat(r"\bhash\s*tag\b"), "#", "space", "none", False),
+    (_pat(r"\b(open|begin)\s+link\b"), "[[", "space", "none", False),
+    (_pat(r"\b(close|end)\s+link\b"), "]]", "strip", "space", False),
+    (_pat(r"\b(begin|start)\s+bold\b"), "**", "space", "none", False),
+    (_pat(r"\bend\s+bold\b"), "**", "strip", "space", False),
+    (_pat(r"\b(begin|start)\s+highlight\b"), "==", "space", "none", False),
+    (_pat(r"\bend\s+highlight\b"), "==", "strip", "space", False),
+
     (_pat(r"\b(dot\s+dot\s+dot|ellipsis)\b"), "...", "strip", "space", False),
     (_pat(r"\bapostrophe[\s-]?(ess|s)\b"), "'s", "strip", "natural", False),
     (_pat(r"\boptional\s+s\b"), "(s)", "strip", "natural", False),
@@ -35,8 +57,8 @@ TOKENS = [
     (_pat(r"\bperiod\b"), ".", "strip", "space", True),
     (_pat(r"\b(point|dot)\b"), ".", "strip", "none", False),
 
-    (_pat(r"\b(open|left)\s+(paren|parenthesis)\b"), "(", "space", "none", False),
-    (_pat(r"\b(close|right)\s+(paren|parenthesis)\b"), ")", "strip", "space", False),
+    (_pat(r"\b(open|left)\s+(paren|parenthesis|parentheses)\b"), "(", "space", "none", False),
+    (_pat(r"\b(close|right)\s+(paren|parenthesis|parentheses)\b"), ")", "strip", "space", False),
 
     (_pat(r"\b(left(\s+square)?|open)\s+bracket\b"), "[", "space", "none", False),
     (_pat(r"\b(right(\s+square)?|close)\s+bracket\b"), "]", "strip", "space", False),
@@ -79,10 +101,11 @@ TOKENS = [
     (_pat(r"\bequal\s+sign\b"), "=", "space", "space", False),
     (_pat(r"\bvertical\s+bar\b"), "|", "space", "space", False),
 
-    # Formatting terms beyond the punctuation table
-    (_pat(r"\bnew\s+line\b"), "\n", "strip", "none", True),
-    (_pat(r"\bindent\b"), "\t", "natural", "none", False),
 ]
+
+LINE_BREAKS = ("\n", "\t")
+OPENERS = ("(", "[", "{", "[[")
+API_PUNCTUATION = ",.;:"
 
 
 def format_transcript(text: str) -> str:
@@ -98,17 +121,22 @@ def format_transcript(text: str) -> str:
             if not m:
                 continue
 
-            if before in ("strip", "space"):
-                while out and out[-1].isspace():
+            if before in ("strip", "space", "line"):
+                while out and out[-1] == " ":
                     out.pop()
-            if before == "space" and out:
+            if before == "space" and out and out[-1] not in LINE_BREAKS + OPENERS:
                 out.append(" ")
+            if before == "line" and out and out[-1] not in LINE_BREAKS:
+                out.append("\n")
 
             out.append(symbol)
             i = m.end()
 
-            if after in ("none", "space"):
+            if after in ("none", "space", "line"):
                 while i < n and text[i].isspace():
+                    i += 1
+            if after == "line":
+                while i < n and (text[i].isspace() or text[i] in API_PUNCTUATION):
                     i += 1
             if after == "space":
                 out.append(" ")
