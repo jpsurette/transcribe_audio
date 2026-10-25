@@ -6,7 +6,7 @@ File: Upload a pre-recorded file from the inputs/ directory to the BATCH endpoin
 Auth: API_KEY saved locally to a .env file or passed via --api-key.
 
 Usage:
-    export API_KEY==...
+    export API_KEY=...
     python transcribe.py file 20260907.m4a
 
 TODO:
@@ -28,11 +28,10 @@ import time
 import shutil
 from pathlib import Path
 from urllib.parse import urlencode
-from dotenv import load_dotenv
-import os
 
 import requests
 
+from config import CLEANED_DIR, INPUTS_DIR, RAW_DIR
 from format_dictation import format_transcript
 
 API_BASE_URL = "https://modulate-developer-apis.com/api"
@@ -46,12 +45,6 @@ OPUS_READ_CHUNK = 4096
 METER_WIDTH = 30 # characters in the live input-level bar
 
 AUDIO_EXTENSIONS = {".m4a", ".mp3", ".mp4", ".wav", ".opus"} #not inclusive of all accepted filetypes
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_INPUTS_DIR = SCRIPT_DIR / "inputs" # defaults to inputs folder for audio files to transcribe
-DEFAULT_OUTPUTS_DIR = SCRIPT_DIR / "outputs"
-
-load_dotenv()
 
 api_key = os.getenv("API_KEY")
 
@@ -72,6 +65,24 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--no-emotion", dest="emotion", action="store_false", help="Disable emotion detection")
     common.add_argument("--no-accent", dest="accent", action="store_false", help="Disable accent detection.")
     common.add_argument("--no-pii", dest="pii", action="store_false", help="Disable PII detection")
+    common.add_argument(
+        "--format",
+        choices=["md", "txt"],
+        default="md",
+        help="File type for the cleaned transcript (default: md).",
+    )
+    common.add_argument(
+        "--raw-dir",
+        type=Path,
+        default=RAW_DIR,
+        help=f"Directory to write raw transcripts to (default: {RAW_DIR})",
+    )
+    common.add_argument(
+        "--cleaned-dir",
+        type=Path,
+        default=CLEANED_DIR,
+        help=f"Directory to write cleaned transcripts to (default: {CLEANED_DIR})",
+    )
     # store_false flags already default to True — no set_defaults needed/desired here.
 
     parser = argparse.ArgumentParser(
@@ -88,11 +99,6 @@ def build_parser() -> argparse.ArgumentParser:
         "file", parents=[common], help="Batch transcribe a single recorded file (m4a/mp3/mp4/wav/opus/...)"
     )
     file_parser.add_argument("audio_file", help="Path to the audio file to transcribe.")
-    file_parser.add_argument(
-        "--outputs-dir",
-        default=str(DEFAULT_OUTPUTS_DIR),
-        help=f"Directory to write transcript files to (default: {DEFAULT_OUTPUTS_DIR})",
-    )
 
     # directory mode
     dir_parser = sub.add_parser(
@@ -100,13 +106,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dir_parser.add_argument(
         "--inputs-dir",
-        default=str(DEFAULT_INPUTS_DIR),
-        help=f"Directory of audio files to transcribe (default: {DEFAULT_INPUTS_DIR})",
-    )
-    dir_parser.add_argument(
-        "--outputs-dir",
-        default=str(DEFAULT_OUTPUTS_DIR),
-        help=f"Directory to write transcript files to (default: {DEFAULT_OUTPUTS_DIR})",
+        type=Path,
+        default=INPUTS_DIR,
+        help=f"Directory of audio files to transcribe (default: {INPUTS_DIR})",
     )
 
     return parser
@@ -116,8 +118,9 @@ def build_parser() -> argparse.ArgumentParser:
 # File mode
 # ------------------------------------------------------------------------------------- #
 
-def run_batch(api_key: str, audio_file_path: Path, output_dir: Path, args: argparse.Namespace) -> None:
-    """ Transcribes an audio file and saves the raw transcript to output_dir/raw """
+def run_batch(api_key: str, audio_file_path: Path, raw_dir: Path, cleaned_dir: Path, args: argparse.Namespace) -> None:
+    """ Transcribes an audio file, saves the raw transcript to raw_dir,
+    then saves the formatted transcript to cleaned_dir """
     start_time = time.perf_counter()
     print(f"Starting transcription at: {start_time}")
 
@@ -136,7 +139,6 @@ def run_batch(api_key: str, audio_file_path: Path, output_dir: Path, args: argpa
     print(f"Finished transcription: {time.perf_counter()}")
     print(f"Audio duration: {result['duration_ms']}ms")
 
-    raw_dir = output_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     stem = audio_file_path.stem
@@ -145,14 +147,19 @@ def run_batch(api_key: str, audio_file_path: Path, output_dir: Path, args: argpa
     with open(raw_path, "w", encoding="utf-8") as file:
         file.write(result["text"])
     print(f"Raw transcript written to: {raw_path}")
-    print("Run dictation_format.py to generate the cleaned transcript.")
+
+    cleaned_dir.mkdir(parents=True, exist_ok=True)
+    cleaned_path = cleaned_dir / f"{stem}.{args.format}"
+
+    with open(cleaned_path, "w", encoding="utf-8") as file:
+        file.write(format_transcript(result["text"]))
+    print(f"Cleaned transcript written to: {cleaned_path}")
 
 
-def run_directory(api_key: str, inputs_dir: str, output_dir: str, args: argparse.Namespace) -> None:
-    """ Transcribes every audio file in inputs_dir, saves raw transcripts to output_dir/raw,
+def run_directory(api_key: str, inputs_dir: Path, raw_dir: Path, cleaned_dir: Path, args: argparse.Namespace) -> None:
+    """ Transcribes every audio file in inputs_dir, saves raw and cleaned transcripts,
     then moves each source file to inputs_dir/transcribed/ """
-    inputs_path = Path(inputs_dir)
-    output_path = Path(output_dir)
+    inputs_path = inputs_dir.expanduser()
     transcribed_path = inputs_path / "transcribed"
     transcribed_path.mkdir(exist_ok=True)
 
@@ -170,7 +177,7 @@ def run_directory(api_key: str, inputs_dir: str, output_dir: str, args: argparse
     for audio_file in audio_files:
         print(f"\n--- Processing: {audio_file.name} ---")
         try:
-            run_batch(api_key, audio_file, output_path, args)
+            run_batch(api_key, audio_file, raw_dir, cleaned_dir, args)
         except Exception as e:
             print(f"Error transcribing {audio_file.name}: {e}")
             continue
@@ -195,13 +202,11 @@ def main() -> None:
     if args.mode == "file":
         if not os.path.isfile(args.audio_file):
             sys.exit(f"Error: audio file not found: {args.audio_file}")
-        run_batch(api_key, Path(args.audio_file), args)
+        run_batch(api_key, Path(args.audio_file), args.raw_dir.expanduser(), args.cleaned_dir.expanduser(), args)
     elif args.mode == "directory":
-        if not os.path.isdir(args.inputs_dir):
+        if not args.inputs_dir.expanduser().is_dir():
             sys.exit(f"Error: inputs directory not found: {args.inputs_dir}")
-        run_directory(api_key, args.inputs_dir, args.outputs_dir, args)
+        run_directory(api_key, args.inputs_dir, args.raw_dir.expanduser(), args.cleaned_dir.expanduser(), args)
 
 if __name__ == "__main__":
     main()
-
-                         

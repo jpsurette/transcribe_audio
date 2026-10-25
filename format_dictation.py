@@ -5,15 +5,18 @@ Converts spoken punctuation/formatting phrases
 Usable standalone against any .txt file, or imported by transcribe.py to clean API output.
 
 CLI usage:
-    python dictation_format.py path/to/raw_transcript.txt
-    python dictation_format.py path/to/raw_transcript.txt --output path/to/cleaned.txt
-    python dictation_format.py path/to/raw_transcript.txt --stdout
+    python format_dictation.py path/to/raw_transcript.txt
+    python format_dictation.py path/to/raw_transcript.txt --output path/to/cleaned.txt
+    python format_dictation.py path/to/raw_transcript.txt --stdout
+    python format_dictation.py path/to/raw_transcript.txt --format txt
 """
 
 import argparse
 import re
 import sys
 from pathlib import Path
+
+from config import CLEANED_DIR, RAW_DIR
 
 
 def _pat(p: str) -> re.Pattern:
@@ -134,17 +137,12 @@ def format_transcript(text: str) -> str:
 # CLI entrypoint — run this module directly against any .txt file
 # ------------------------------------------------------------------------------------- #
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_RAW_DIR = SCRIPT_DIR / "outputs" / "raw"
-DEFAULT_CLEANED_DIR = SCRIPT_DIR / "outputs" / "cleaned"
-
-
-def _default_output_path(input_path: Path) -> Path:
-    """outputs/raw/foo.raw_transcript.txt -> outputs/cleaned/foo.txt"""
+def _default_output_path(input_path: Path, cleaned_dir: Path, file_format: str) -> Path:
+    """raw/foo.raw_transcript.txt -> cleaned_dir/foo.<file_format>"""
     stem = input_path.stem
     if stem.endswith(".raw_transcript"):
         stem = stem[: -len(".raw_transcript")]
-    return DEFAULT_CLEANED_DIR / f"{stem}.txt"
+    return cleaned_dir / f"{stem}.{file_format}"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -155,13 +153,13 @@ def build_parser() -> argparse.ArgumentParser:
         "input_file",
         nargs="?",
         default=None,
-        help=f"Path to a raw transcript .txt file. If omitted, processes every .txt file "
-             f"in {DEFAULT_RAW_DIR}.",
+        help="Path to a raw transcript .txt file. If omitted, processes every .txt file "
+             "in --raw-dir.",
     )
     parser.add_argument(
         "--output",
         default=None,
-        help="Path to write the cleaned transcript to. Defaults to outputs/cleaned/<name>.txt "
+        help="Path to write the cleaned transcript to. Defaults to <cleaned-dir>/<name>.<format> "
              "(with any '.raw_transcript' suffix stripped).",
     )
     parser.add_argument(
@@ -169,10 +167,30 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the cleaned transcript to stdout instead of writing a file.",
     )
+    parser.add_argument(
+        "--format",
+        choices=["md", "txt"],
+        default="md",
+        help="File type for the cleaned transcript when --output isn't given (default: md).",
+    )
+    parser.add_argument(
+        "--raw-dir",
+        type=Path,
+        default=RAW_DIR,
+        help=f"Directory of raw transcripts for batch mode (default: {RAW_DIR})",
+    )
+    parser.add_argument(
+        "--cleaned-dir",
+        type=Path,
+        default=CLEANED_DIR,
+        help=f"Directory to write cleaned transcripts to (default: {CLEANED_DIR})",
+    )
     return parser
 
 
-def _process_file(input_path: Path, output_arg: str | None, to_stdout: bool) -> None:
+def _process_file(
+    input_path: Path, output_arg: str | None, to_stdout: bool, cleaned_dir: Path, file_format: str
+) -> None:
     if not input_path.is_file():
         sys.exit(f"Error: input file not found: {input_path}")
 
@@ -183,7 +201,7 @@ def _process_file(input_path: Path, output_arg: str | None, to_stdout: bool) -> 
         print(cleaned_text)
         return
 
-    output_path = Path(output_arg) if output_arg else _default_output_path(input_path)
+    output_path = Path(output_arg) if output_arg else _default_output_path(input_path, cleaned_dir, file_format)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(cleaned_text, encoding="utf-8")
     print(f"Cleaned transcript written to: {output_path}")
@@ -191,25 +209,27 @@ def _process_file(input_path: Path, output_arg: str | None, to_stdout: bool) -> 
 
 def main() -> None:
     args = build_parser().parse_args()
+    raw_dir = args.raw_dir.expanduser()
+    cleaned_dir = args.cleaned_dir.expanduser()
 
     if args.input_file:
-        _process_file(Path(args.input_file), args.output, args.stdout)
+        _process_file(Path(args.input_file), args.output, args.stdout, cleaned_dir, args.format)
         return
 
     # No file given -> batch-process everything in outputs/raw/
     if args.output and not args.stdout:
         sys.exit("Error: --output can only be used with a single input_file, not in batch mode.")
 
-    if not DEFAULT_RAW_DIR.is_dir():
-        sys.exit(f"Error: default raw directory not found: {DEFAULT_RAW_DIR}")
+    if not raw_dir.is_dir():
+        sys.exit(f"Error: raw directory not found: {raw_dir}")
 
-    txt_files = sorted(DEFAULT_RAW_DIR.glob("*.txt"))
+    txt_files = sorted(raw_dir.glob("*.txt"))
     if not txt_files:
-        print(f"No .txt files found in {DEFAULT_RAW_DIR}")
+        print(f"No .txt files found in {raw_dir}")
         return
 
     for input_path in txt_files:
-        _process_file(input_path, output_arg=None, to_stdout=args.stdout)
+        _process_file(input_path, output_arg=None, to_stdout=args.stdout, cleaned_dir=cleaned_dir, file_format=args.format)
 
 
 if __name__ == "__main__":
