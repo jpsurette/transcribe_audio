@@ -10,9 +10,10 @@ The API punctuates the same audio differently between runs, so keep each run as 
 """
 
 import unittest
+from datetime import date
 from pathlib import Path
 
-from format_dictation import format_transcript
+from format_dictation import date_from_filename, format_transcript
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "test_fixtures"
 
@@ -58,6 +59,33 @@ CASES = [
     ("comma, slash", ",/"),
     ("Done. Period. Next", "Done. Next"),
 
+    # Number expressions
+    ("2026 dash, ten dash, 20, class", "2026-10-20, class"),
+    ("pages 5 dash 10", "pages 5-10"),
+    ("a dash of salt", "a -- of salt"),
+    ("ten slash 20", "10/20"),
+    ("three point five", "three point five"),
+    ("three dot five", "3.5"),
+    ("key point", "key point"),
+    ("meet at ten colon thirty", "meet at 10:30"),
+    ("twenty-six dash thirty", "26-30"),
+    ("fifty hyphen fifty", "50-50"),
+    ("one hundred twenty dash two hundred", "120-200"),
+    ("code 007 dash 12", "code 007-12"),
+    ("one thought", "one thought"),
+    ("1-2-3", "1-2-3"),
+    ("one, two, three.", "one, two, three."),
+    ("file dot txt", "file.txt"),
+
+    # Date command
+    ("date 2026 10 20", "2026-10-20"),
+    ("date twenty twenty six, ten, twenty", "2026-10-20"),
+    ("date two thousand twenty six dash ten dash five", "2026-10-05"),
+    ("date 2026 10 20 two people", "2026-10-20 two people"),
+    ("date 2026 13 40", "date 2026 13 40"),
+    ("up to date", "up to date"),
+    ("date today", "date today"),  # no recording date available
+
     # Bold / highlight
     ("this is begin bold important end bold okay", "this is **important** okay"),
     ("a bold idea", "a bold idea"),
@@ -71,6 +99,17 @@ class FormatTranscriptTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(format_transcript(raw), expected)
 
+    def test_date_today(self):
+        recorded = date(2026, 10, 25)
+        self.assertEqual(format_transcript("date today", recorded), "2026-10-25")
+        self.assertEqual(format_transcript("open link date today close link", recorded), "[[2026-10-25]] ")
+
+    def test_date_from_filename(self):
+        self.assertEqual(date_from_filename("20261025_1407.m4a"), date(2026, 10, 25))
+        self.assertEqual(date_from_filename("20261025_1407.raw_transcript.txt"), date(2026, 10, 25))
+        self.assertIsNone(date_from_filename("punctuation_experiment.MP3"))
+        self.assertIsNone(date_from_filename("20261399_0000.m4a"))
+
     def test_fixtures(self):
         raw_files = sorted(FIXTURES_DIR.glob("*.raw.txt"))
         self.assertTrue(raw_files, f"No fixtures found in {FIXTURES_DIR}")
@@ -78,7 +117,7 @@ class FormatTranscriptTests(unittest.TestCase):
             expected_path = raw_path.with_name(raw_path.name.replace(".raw.txt", ".expected.md"))
             with self.subTest(fixture=raw_path.name):
                 self.assertEqual(
-                    format_transcript(raw_path.read_text(encoding="utf-8")),
+                    format_transcript(raw_path.read_text(encoding="utf-8"), date_from_filename(raw_path.name)),
                     expected_path.read_text(encoding="utf-8"),
                 )
 

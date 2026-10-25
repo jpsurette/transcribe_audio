@@ -26,13 +26,14 @@ import sys
 import time
 
 import shutil
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlencode
 
 import requests
 
 from config import CLEANED_DIR, INPUTS_DIR, RAW_DIR
-from format_dictation import format_transcript
+from format_dictation import date_from_filename, format_transcript
 
 API_BASE_URL = "https://modulate-developer-apis.com/api"
 BATCH_ENDPOINT = f"{API_BASE_URL}/velma-2-stt-batch"
@@ -45,6 +46,10 @@ OPUS_READ_CHUNK = 4096
 METER_WIDTH = 30 # characters in the live input-level bar
 
 AUDIO_EXTENSIONS = {".m4a", ".mp3", ".mp4", ".wav", ".opus"} #not inclusive of all accepted filetypes
+
+# The API rejects some extensions whose container it does support, so upload them under an accepted name.
+# .m4a (iPhone recordings) is an MP4 container.
+UPLOAD_EXTENSION_ALIASES = {".m4a": ".mp4"}
 
 api_key = os.getenv("API_KEY")
 
@@ -124,16 +129,20 @@ def run_batch(api_key: str, audio_file_path: Path, raw_dir: Path, cleaned_dir: P
     start_time = time.perf_counter()
     print(f"Starting transcription at: {start_time}")
 
+    suffix = audio_file_path.suffix.lower()
+    upload_name = audio_file_path.with_suffix(UPLOAD_EXTENSION_ALIASES.get(suffix, suffix)).name
+
     with open(audio_file_path, "rb") as audio_file:
         response = requests.post(
             BATCH_ENDPOINT,
             headers={"X-API-Key": api_key},
-            files={"upload_file": audio_file},
+            files={"upload_file": (upload_name, audio_file)},
             #data=feature_flags(args),
         )
 
     print(f"Response status: {response.status_code}")
-    response.raise_for_status()
+    if not response.ok:
+        raise RuntimeError(f"{response.status_code} from API: {response.text}")
     result = response.json()
 
     print(f"Finished transcription: {time.perf_counter()}")
@@ -152,8 +161,13 @@ def run_batch(api_key: str, audio_file_path: Path, raw_dir: Path, cleaned_dir: P
     cleaned_path = cleaned_dir / f"{stem}.{args.format}"
 
     with open(cleaned_path, "w", encoding="utf-8") as file:
-        file.write(format_transcript(result["text"]))
+        file.write(format_transcript(result["text"], recorded_on=recording_date(audio_file_path)))
     print(f"Cleaned transcript written to: {cleaned_path}")
+
+
+def recording_date(audio_file_path: Path) -> date:
+    """Date from a YYYYMMDD timestamp in the filename, else the file's modification date."""
+    return date_from_filename(audio_file_path.name) or date.fromtimestamp(audio_file_path.stat().st_mtime)
 
 
 def run_directory(api_key: str, inputs_dir: Path, raw_dir: Path, cleaned_dir: Path, args: argparse.Namespace) -> None:

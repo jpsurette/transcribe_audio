@@ -14,6 +14,7 @@ CLI usage:
 import argparse
 import re
 import sys
+from datetime import date
 from pathlib import Path
 
 from config import CLEANED_DIR, RAW_DIR
@@ -60,7 +61,7 @@ TOKENS = [
     (_pat(r"\boptional\s+s\b"), "(s)", "strip", "natural", False),
 
     (_pat(r"\bperiod\b"), ".", "strip", "space", True),
-    (_pat(r"\b(point|dot)\b"), ".", "strip", "none", False),
+    (_pat(r"\bdot\b"), ".", "strip", "none", False),
 
     (_pat(r"\b(open|left)\s+(paren|parenthesis|parentheses)\b"), "(", "space", "none", False),
     (_pat(r"\b(close|right)\s+(paren|parenthesis|parentheses)\b"), ")", "strip", "space", False),
@@ -114,8 +115,131 @@ API_PUNCTUATION = ",.;:!?"
 JOINER_PUNCTUATION = ",;:"
 
 
-def format_transcript(text: str) -> str:
-    """Convert spoken punctuation/formatting phrases into literal characters."""
+# ------------------------------------------------------------------------------------- #
+# Numbers and dates — run before the token pass
+# ------------------------------------------------------------------------------------- #
+# Number words only become digits inside a number expression (numbers joined by a spoken
+# dash/slash/colon/dot) or a "date" command, so ordinary speech ("one thought") is untouched.
+
+UNITS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+TEENS = ["ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"]
+TENS = ["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+WORD_VALUES = (
+    {w: i for i, w in enumerate(UNITS)}
+    | {w: i + 10 for i, w in enumerate(TEENS)}
+    | {w: (i + 2) * 10 for i, w in enumerate(TENS)}
+)
+
+_NUM_WORD = (
+    rf"\b(?:(?:{'|'.join(TENS)})(?:[\s-]+(?:{'|'.join(UNITS[1:])}))?"
+    rf"|{'|'.join(TEENS)}|{'|'.join(UNITS)}|hundred|thousand)\b"
+)
+NUM = rf"(?:\b\d+\b|{_NUM_WORD}(?:\s+{_NUM_WORD})*)"
+
+NUMBER_JOINERS = {"dash": "-", "hyphen": "-", "slash": "/", "colon": ":", "dot": "."}
+# Spoken joiner (API punctuation allowed around it), or a literal - / : touching a digit.
+_SPOKEN_JOINER = r"[\s,.;]*\b(dash|hyphen|(?:forward\s+)?slash|colon|dot)\b[\s,.;]*"
+_LITERAL_JOINER = r"((?<=\d)[-/:]|[-/:](?=\d))"
+JOINER = rf"(?:{_SPOKEN_JOINER}|{_LITERAL_JOINER})"
+
+NUMBER_EXPRESSION_RE = re.compile(rf"{NUM}(?:{JOINER}{NUM})+", re.IGNORECASE)
+DATE_RE = re.compile(
+    rf"\bdate[\s,.:]+(?:(?P<today>today)\b|(?P<parts>{NUM}(?:(?:{JOINER}|[\s,.]+){NUM})*))",
+    re.IGNORECASE,
+)
+FILENAME_DATE_RE = re.compile(r"(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)")
+
+
+def _number_chunks(text: str) -> list[tuple[int, int]]:
+    """Parse digits and number words into (value, end offset) chunks.
+
+    "twenty six" -> [26], "two thousand twenty six" -> [2026], "twenty twenty six" -> [20, 26]
+    """
+    chunks: list[tuple[int, int]] = []
+    can_add = 0  # the last chunk absorbs a following value smaller than this
+    for m in re.finditer(r"\d+|[a-z]+", text, re.IGNORECASE):
+        token = m.group().lower()
+        if token.isdigit():
+            chunks.append((int(token), m.end()))
+            can_add = 0
+        elif token in ("hundred", "thousand") and chunks:
+            scale = 100 if token == "hundred" else 1000
+            chunks[-1] = (chunks[-1][0] * scale, m.end())
+            can_add = scale
+        elif token in WORD_VALUES:
+            value = WORD_VALUES[token]
+            if chunks and value < can_add:
+                chunks[-1] = (chunks[-1][0] + value, m.end())
+            else:
+                chunks.append((value, m.end()))
+            can_add = 10 if value >= 20 and value % 10 == 0 else 0
+    return chunks
+
+
+def _number_to_digits(text: str) -> str:
+    if text.strip().isdigit():
+        return text.strip()  # keep as written, e.g. the leading zero in "05"
+    return "".join(str(value) for value, _ in _number_chunks(text))
+
+
+def _convert_number_expression(m: re.Match) -> str:
+    parts = re.split(JOINER, m.group(), flags=re.IGNORECASE)
+    # re.split returns [num, spoken, literal, num, spoken, literal, num, ...]
+    out = _number_to_digits(parts[0])
+    for i in range(1, len(parts), 3):
+        spoken, literal, number = parts[i], parts[i + 1], parts[i + 2]
+        joiner = literal or NUMBER_JOINERS[spoken.lower().split()[-1]]
+        out += joiner + _number_to_digits(number)
+    return out
+
+
+def _convert_date(m: re.Match, recorded_on: date | None) -> str:
+    if m.group("today"):
+        return recorded_on.isoformat() if recorded_on else m.group()
+
+    parts = m.group("parts")
+    chunks = _number_chunks(parts)
+    values = [value for value, _ in chunks]
+    if len(values) >= 3 and values[0] >= 1000:
+        (year, month, day), used = values[:3], 3
+    elif len(values) >= 4 and 10 <= values[0] <= 99 and values[1] <= 99:
+        year, month, day, used = values[0] * 100 + values[1], values[2], values[3], 4
+    else:
+        return m.group()
+
+    try:
+        iso = date(year, month, day).isoformat()
+    except ValueError:
+        return m.group()
+    leftover = parts[chunks[used - 1][1]:]
+    return iso + leftover
+
+
+def date_from_filename(name: str) -> date | None:
+    """Recording date from a YYYYMMDD timestamp in a filename, e.g. 20261025_1407.m4a."""
+    m = FILENAME_DATE_RE.search(name)
+    if not m:
+        return None
+    try:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+
+
+def convert_numbers(text: str, recorded_on: date | None = None) -> str:
+    """Apply "date" commands, then turn number expressions into digits."""
+    text = DATE_RE.sub(lambda m: _convert_date(m, recorded_on), text)
+    return NUMBER_EXPRESSION_RE.sub(_convert_number_expression, text)
+
+
+
+def format_transcript(text: str, recorded_on: date | None = None) -> str:
+    """Convert spoken punctuation/formatting phrases into literal characters.
+
+    recorded_on fills in "date today"; without it that phrase is left as spoken.
+    """
+    text = convert_numbers(text, recorded_on)
+
     # Each chunk is (text, from_command) so punctuation the API inserted can be told apart
     # from symbols produced by spoken commands.
     out: list[tuple[str, bool]] = []
@@ -245,7 +369,7 @@ def _process_file(
         sys.exit(f"Error: input file not found: {input_path}")
 
     raw_text = input_path.read_text(encoding="utf-8")
-    cleaned_text = format_transcript(raw_text)
+    cleaned_text = format_transcript(raw_text, recorded_on=date_from_filename(input_path.name))
 
     if to_stdout:
         print(cleaned_text)
