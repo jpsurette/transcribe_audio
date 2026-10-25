@@ -2,10 +2,10 @@
 Regression tests for format_dictation.format_transcript.
 
 Run with:
-    python -m unittest test_format_dictation
+    python -m unittest            (from the repo root)
 
 When a real dictation formats wrong, add its raw text and the output you expected to CASES.
-Full transcripts live in test_fixtures/ as <name>.raw.txt with a matching <name>.expected.md.
+Full transcripts live in tests/fixtures/ as <name>.raw.txt with a matching <name>.expected.md.
 The API punctuates the same audio differently between runs, so keep each run as its own fixture.
 """
 
@@ -15,7 +15,7 @@ from pathlib import Path
 
 from format_dictation import date_from_filename, format_transcript, load_glossary, parse_glossary
 
-FIXTURES_DIR = Path(__file__).resolve().parent / "test_fixtures"
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 FIXTURE_GLOSSARY = load_glossary(FIXTURES_DIR / "glossary.txt")
 
 GLOSSARY = parse_glossary("""
