@@ -33,6 +33,8 @@ import os
 
 import requests
 
+from format_dictation import format_transcript
+
 API_BASE_URL = "https://modulate-developer-apis.com/api"
 BATCH_ENDPOINT = f"{API_BASE_URL}/velma-2-stt-batch"
 STREAMING_ENDPOINT = "wss://modulate-developer-apis.com/api/velma-2-stt-streaming"
@@ -115,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
 # ------------------------------------------------------------------------------------- #
 
 def run_batch(api_key: str, audio_file_path: Path, output_dir: Path, args: argparse.Namespace) -> None:
-    """ Transcribes an audio file and saves the transcripts to output_dir """
+    """ Transcribes an audio file and saves the raw transcript to output_dir/raw """
     start_time = time.perf_counter()
     print(f"Starting transcription at: {start_time}")
 
@@ -134,19 +136,20 @@ def run_batch(api_key: str, audio_file_path: Path, output_dir: Path, args: argpa
     print(f"Finished transcription: {time.perf_counter()}")
     print(f"Audio duration: {result['duration_ms']}ms")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    raw_dir = output_dir / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
 
     stem = audio_file_path.stem
-    raw_path = output_dir / f"{stem}.raw_transcript.txt"
-    cleaned_path = output_dir / f"{stem}.cleaned_transcript.txt"
+    raw_path = raw_dir / f"{stem}.raw_transcript.txt"
 
     with open(raw_path, "w", encoding="utf-8") as file:
         file.write(result["text"])
     print(f"Raw transcript written to: {raw_path}")
+    print("Run dictation_format.py to generate the cleaned transcript.")
 
 
 def run_directory(api_key: str, inputs_dir: str, output_dir: str, args: argparse.Namespace) -> None:
-    """ Transcribes every audio file in inputs_dir, saves transcripts to output_dir,
+    """ Transcribes every audio file in inputs_dir, saves raw transcripts to output_dir/raw,
     then moves each source file to inputs_dir/transcribed/ """
     inputs_path = Path(inputs_dir)
     output_path = Path(output_dir)
@@ -200,3 +203,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+                         
