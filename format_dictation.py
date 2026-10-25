@@ -19,27 +19,32 @@ from pathlib import Path
 from config import CLEANED_DIR, RAW_DIR
 
 
+# The API inserts its own punctuation between the words of a spoken command
+# ("Dot, dot, dot", "new line. New line"), so word gaps in patterns allow it.
+WORD_GAP = r"[\s,.;:!?]+"
+
+
 def _pat(p: str) -> re.Pattern:
-    return re.compile(p, re.IGNORECASE)
+    return re.compile(p.replace(r"\s+", WORD_GAP), re.IGNORECASE)
 
 
 # (pattern, symbol, before, after, capitalize_next)
 #   before: 'strip' (remove spaces before symbol) | 'space' (force exactly one space before)
 #           | 'line' (strip spaces and start a new line if not already at one) | 'natural' (leave as-is)
 #   after:  'none' (attach directly to next word) | 'space' (force exactly one space) | 'natural' (leave as-is)
-#           | 'line' (like 'none', but also drop punctuation the API inserted after the command)
 # Only spaces are stripped, never newlines or tabs produced by earlier commands.
+# Punctuation the API inserted around a command is dropped (see format_transcript).
 # Order matters where one phrase is a prefix of another (e.g. ellipsis vs. dot).
 TOKENS = [
     # Line structure (Markdown / Obsidian)
-    (_pat(r"\bnew\s+paragraph\b"), "\n\n", "strip", "line", True),
-    (_pat(r"\bnew\s+line\b"), "\n", "strip", "line", True),
-    (_pat(r"\bcheck\s*box\b"), "- [ ] ", "line", "line", True),
-    (_pat(r"\bbullet(\s+point)?\b"), "- ", "line", "line", True),
-    (_pat(r"\bheading\s+(one|1)\b"), "# ", "line", "line", True),
-    (_pat(r"\bheading\s+(two|2)\b"), "## ", "line", "line", True),
-    (_pat(r"\bheading\s+(three|3)\b"), "### ", "line", "line", True),
-    (_pat(r"\bindent\b"), "\t", "natural", "line", False),
+    (_pat(r"\bnew\s+paragraph\b"), "\n\n", "strip", "none", True),
+    (_pat(r"\bnew\s+line\b"), "\n", "strip", "none", True),
+    (_pat(r"\bcheck\s*box\b"), "- [ ] ", "line", "none", True),
+    (_pat(r"\bbullet(\s+point)?\b"), "- ", "line", "none", True),
+    (_pat(r"\bheading\s+(one|1)\b"), "# ", "line", "none", True),
+    (_pat(r"\bheading\s+(two|2)\b"), "## ", "line", "none", True),
+    (_pat(r"\bheading\s+(three|3)\b"), "### ", "line", "none", True),
+    (_pat(r"\bindent\b"), "\t", "natural", "none", False),
 
     # Obsidian inline syntax
     (_pat(r"\bhash\s*tag\b"), "#", "space", "none", False),
@@ -69,7 +74,7 @@ TOKENS = [
     (_pat(r"\b(left\s+angle\s+bracket|less\s+than\s+sign|open\s+angle\s+bracket)\b"), "<", "space", "none", False),
     (_pat(r"\b(right\s+angle\s+bracket|greater\s+than\s+sign|close\s+angle\s+bracket)\b"), ">", "strip", "space", False),
 
-    (_pat(r"\bexclamation\s+(mark|point)\b"), "!", "strip", "space", False),
+    (_pat(r"\bexclamation(\s+(mark|point))?\b"), "!", "strip", "space", False),
     (_pat(r"\bquestion\s+mark\b"), "?", "strip", "space", False),
 
     (_pat(r"\b(begin|open)\s+(double\s+)?(quote|quotes)\b"), '"', "space", "none", False),
@@ -105,14 +110,24 @@ TOKENS = [
 
 LINE_BREAKS = ("\n", "\t")
 OPENERS = ("(", "[", "{", "[[")
-API_PUNCTUATION = ",.;:"
+API_PUNCTUATION = ",.;:!?"
+JOINER_PUNCTUATION = ",;:"
 
 
 def format_transcript(text: str) -> str:
     """Convert spoken punctuation/formatting phrases into literal characters."""
-    out: list[str] = []
+    # Each chunk is (text, from_command) so punctuation the API inserted can be told apart
+    # from symbols produced by spoken commands.
+    out: list[tuple[str, bool]] = []
     i, n = 0, len(text)
     capitalize_next = False
+
+    def last() -> str:
+        return out[-1][0] if out else ""
+
+    def strip_spaces() -> None:
+        while out and out[-1][0] == " ":
+            out.pop()
 
     while i < n:
         matched = False
@@ -121,25 +136,32 @@ def format_transcript(text: str) -> str:
             if not m:
                 continue
 
-            if before in ("strip", "space", "line"):
-                while out and out[-1] == " ":
+            # Drop API-inserted punctuation just before the command. Line-level commands
+            # keep sentence enders (.!?) since a sentence often legitimately ends there.
+            structural = before == "line" or symbol.startswith(LINE_BREAKS)
+            droppable = JOINER_PUNCTUATION if structural else API_PUNCTUATION
+            if before != "natural" or structural:
+                strip_spaces()
+                while out and not out[-1][1] and out[-1][0] in droppable:
                     out.pop()
-            if before == "space" and out and out[-1] not in LINE_BREAKS + OPENERS:
-                out.append(" ")
-            if before == "line" and out and out[-1] not in LINE_BREAKS:
-                out.append("\n")
+                    strip_spaces()
 
-            out.append(symbol)
+            if before in ("strip", "space", "line"):
+                strip_spaces()
+            if before == "space" and out and not last().endswith(LINE_BREAKS + OPENERS):
+                out.append((" ", False))
+            if before == "line" and out and not last().endswith(LINE_BREAKS):
+                out.append(("\n", True))
+
+            out.append((symbol, True))
             i = m.end()
 
-            if after in ("none", "space", "line"):
-                while i < n and text[i].isspace():
-                    i += 1
-            if after == "line":
+            # Drop API-inserted punctuation (and spacing) just after the command.
+            if after in ("none", "space"):
                 while i < n and (text[i].isspace() or text[i] in API_PUNCTUATION):
                     i += 1
             if after == "space":
-                out.append(" ")
+                out.append((" ", False))
 
             if cap_next:
                 capitalize_next = True
@@ -152,13 +174,13 @@ def format_transcript(text: str) -> str:
 
         ch = text[i]
         if capitalize_next and ch.isalpha():
-            out.append(ch.upper())
+            out.append((ch.upper(), False))
             capitalize_next = False
         else:
-            out.append(ch)
+            out.append((ch, False))
         i += 1
 
-    return "".join(out)
+    return "".join(chunk for chunk, _ in out)
 
 
 # ------------------------------------------------------------------------------------- #
